@@ -1,0 +1,25 @@
+﻿{
+    "flutter": {
+                    "platforms":  {
+                                      "android":  {
+                                                      "default":  {
+                                                                      "projectId":  "asistencia-qr-uts",
+                                                                      "appId":  "1:401577825078:android:c46da0bb5e136559395997",
+                                                                      "fileOutput":  "android/app/google-services.json"
+                                                                  }
+                                                  },
+                                      "dart":  {
+                                                   "lib/firebase_options.dart":  {
+                                                                                     "projectId":  "asistencia-qr-uts",
+                                                                                     "configurations":  {
+                                                                                                            "android":  "1:401577825078:android:c46da0bb5e136559395997",
+                                                                                                            "web":  "1:401577825078:web:3d12ee7bdf4943f3395997"
+                                                                                                        }
+                                                                                 }
+                                               }
+                                  }
+                },
+    "firestore":  {
+                      "rules":  "firestore.rules"
+                  }
+}

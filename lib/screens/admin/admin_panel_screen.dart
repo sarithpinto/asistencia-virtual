@@ -1,0 +1,274 @@
+import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
+
+import 'package:asistencia_qr/core/theme/app_theme.dart';
+import 'package:asistencia_qr/core/theme/app_styles.dart';
+import 'package:asistencia_qr/core/widgets/fondo_vinotinto.dart';
+import 'package:asistencia_qr/providers/sesion_provider.dart';
+import 'package:asistencia_qr/screens/auth/login_screen.dart';
+
+import 'solicitudes_docentes_screen.dart';
+import 'gestionar_usuarios_screen.dart';
+import 'gestionar_clases_screen.dart';
+import 'estadisticas_generales_screen.dart';
+
+class AdminPanelScreen extends StatelessWidget {
+  const AdminPanelScreen({super.key});
+
+  Future<void> _cerrarSesion(BuildContext context) async {
+    await FirebaseAuth.instance.signOut();
+
+    if (!context.mounted) return;
+
+    context.read<SesionProvider>().cerrarSesionLocal();
+
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
+  }
+
+  Widget _crearTarjeta({
+    required BuildContext context,
+    required IconData icono,
+    required String titulo,
+    required String descripcion,
+    required VoidCallback onTap,
+  }) {
+    return Card(
+      color: crema,
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppStyles.radioTarjeta),
+        side: const BorderSide(color: Color(0xFFE2D8C9)),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppStyles.radioTarjeta),
+        child: Padding(
+          padding: AppStyles.paddingTarjetaAdmin,
+          child: Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: verde.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icono, color: verde, size: 27),
+              ),
+              const SizedBox(width: 15),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      titulo,
+                      style: const TextStyle(
+                        color: verde,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      descripcion,
+                      style: const TextStyle(
+                        color: vinotintoMedio,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.arrow_forward_ios_rounded,
+                color: verde,
+                size: 17,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sesion = context.watch<SesionProvider>();
+
+    if (sesion.rol != 'Administrador' || sesion.usuario == null) {
+      return const Scaffold(
+        body: Center(child: Text('No hay una sesión válida de administrador.')),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: vinotintoOscuro,
+        foregroundColor: crema,
+        title: const Text('Panel administrativo'),
+        actions: [
+          IconButton(
+            tooltip: 'Cerrar sesión',
+            onPressed: () => _cerrarSesion(context),
+            icon: const Icon(Icons.logout_rounded),
+          ),
+        ],
+      ),
+      body: FondoVinotinto(
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(22),
+                  decoration: BoxDecoration(
+                    color: crema,
+                    borderRadius: BorderRadius.circular(22),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 27,
+                            backgroundColor: verde,
+                            child: Icon(
+                              Icons.admin_panel_settings_rounded,
+                              color: crema,
+                              size: 30,
+                            ),
+                          ),
+                          SizedBox(width: 13),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Bienvenido, administrador',
+                                  style: TextStyle(
+                                    color: verde,
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                  'Gestión de Asistencia Virtual',
+                                  style: TextStyle(
+                                    color: vinotintoMedio,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      const Divider(color: Color(0xFFD8CCBC)),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Desde aquí podrás administrar los usuarios, '
+                        'autorizar docentes y supervisar la plataforma.',
+                        style: TextStyle(
+                          color: verde,
+                          fontSize: 14,
+                          height: 1.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const Text(
+                  'Administración',
+                  style: TextStyle(
+                    color: crema,
+                    fontSize: 21,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _crearTarjeta(
+                  context: context,
+                  icono: Icons.person_add_alt_1_rounded,
+                  titulo: 'Solicitudes de docentes',
+                  descripcion: 'Revisar, aprobar o rechazar solicitudes.',
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const SolicitudesDocentesScreen(),
+                      ),
+                    );
+                  },
+                ),
+                _crearTarjeta(
+                  context: context,
+                  icono: Icons.people_alt_rounded,
+                  titulo: 'Gestionar usuarios',
+                  descripcion: 'Consultar estudiantes y docentes.',
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const GestionarUsuariosScreen(),
+                      ),
+                    );
+                  },
+                ),
+                _crearTarjeta(
+                  context: context,
+                  icono: Icons.menu_book_rounded,
+                  titulo: 'Gestionar clases',
+                  descripcion: 'Consultar las clases de la institución.',
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const GestionarClasesScreen(),
+                      ),
+                    );
+                  },
+                ),
+                _crearTarjeta(
+                  context: context,
+                  icono: Icons.bar_chart_rounded,
+                  titulo: 'Estadísticas generales',
+                  descripcion: 'Consultar los indicadores de asistencia.',
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const EstadisticasGeneralesScreen(),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 20),
+                OutlinedButton.icon(
+                  onPressed: () => _cerrarSesion(context),
+                  icon: const Icon(Icons.logout_rounded),
+                  label: const Text('Cerrar sesión'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: crema,
+                    side: const BorderSide(color: crema),
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

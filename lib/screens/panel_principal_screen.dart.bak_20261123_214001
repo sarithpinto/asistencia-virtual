@@ -1,0 +1,332 @@
+import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
+
+import 'package:asistencia_qr/core/theme/app_theme.dart';
+import 'package:asistencia_qr/core/widgets/fondo_vinotinto.dart';
+import 'package:asistencia_qr/models/opcion_menu.dart';
+import 'package:asistencia_qr/providers/sesion_provider.dart';
+import 'package:asistencia_qr/screens/auth/login_screen.dart';
+import 'package:asistencia_qr/screens/docente/mis_clases_screen.dart';
+import 'package:asistencia_qr/screens/estudiante/mis_clases_estudiante_screen.dart';
+import 'package:asistencia_qr/screens/docente/generar_qr_screen.dart';
+import 'package:asistencia_qr/screens/estudiante/escanear_qr_screen.dart';
+import 'package:asistencia_qr/screens/docente/estudiantes_screen.dart';
+import 'package:asistencia_qr/screens/docente/reportes_docente_screen.dart';
+import 'package:asistencia_qr/screens/estudiante/asistencia_estudiante_screen.dart';
+
+class PanelPrincipalScreen extends StatelessWidget {
+  const PanelPrincipalScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final String tipoUsuario = context.watch<SesionProvider>().rol ?? '';
+
+    if (tipoUsuario != 'Estudiante' && tipoUsuario != 'Docente') {
+      return const Scaffold(
+        body: Center(
+          child: Text('No hay una sesión válida. Vuelve a iniciar sesión.'),
+        ),
+      );
+    }
+
+    final bool esEstudiante = tipoUsuario == 'Estudiante';
+
+    final opciones = esEstudiante
+        ? const [
+            OpcionMenu(
+              icono: Icons.qr_code_scanner_rounded,
+              titulo: 'Escanear código QR',
+              descripcion: 'Registrar asistencia a una clase',
+            ),
+            OpcionMenu(
+              icono: Icons.fact_check_outlined,
+              titulo: 'Mi asistencia',
+              descripcion: 'Consultar registros de asistencia',
+            ),
+            OpcionMenu(
+              icono: Icons.calendar_month_rounded,
+              titulo: 'Mis clases',
+              descripcion: 'Consultar las clases disponibles',
+            ),
+            OpcionMenu(
+              icono: Icons.history_rounded,
+              titulo: 'Historial',
+              descripcion: 'Revisar asistencias anteriores',
+            ),
+          ]
+        : const [
+            OpcionMenu(
+              icono: Icons.menu_book_rounded,
+              titulo: 'Mis clases',
+              descripcion: 'Crear y consultar tus clases',
+            ),
+            OpcionMenu(
+              icono: Icons.qr_code_2_rounded,
+              titulo: 'Generar código QR',
+              descripcion: 'Preparar el registro de asistencia',
+            ),
+            OpcionMenu(
+              icono: Icons.groups_rounded,
+              titulo: 'Estudiantes',
+              descripcion: 'Consultar la asistencia del grupo',
+            ),
+            OpcionMenu(
+              icono: Icons.bar_chart_rounded,
+              titulo: 'Reportes',
+              descripcion: 'Consultar resúmenes de asistencia',
+            ),
+          ];
+
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: crema,
+        foregroundColor: verde,
+        title: const Text(
+          'Asistencia Virtual',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Cerrar sesión',
+            icon: const Icon(Icons.logout_rounded),
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+
+              if (!context.mounted) return;
+
+              context.read<SesionProvider>().cerrarSesionLocal();
+
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
+              );
+            },
+          ),
+        ],
+      ),
+      body: FondoVinotinto(
+        child: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.all(22),
+            children: [
+              const SizedBox(height: 12),
+              Text(
+                esEstudiante ? '¡Hola, estudiante!' : '¡Hola, docente!',
+                style: const TextStyle(
+                  color: crema,
+                  fontSize: 27,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                esEstudiante
+                    ? 'Organiza tus clases y lleva el control de tu asistencia.'
+                    : 'Gestiona tus clases y consulta la asistencia de tus estudiantes.',
+                style: const TextStyle(color: crema, fontSize: 14, height: 1.5),
+              ),
+              const SizedBox(height: 28),
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: crema,
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      esEstudiante
+                          ? Icons.school_rounded
+                          : Icons.co_present_rounded,
+                      color: verde,
+                      size: 40,
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            tipoUsuario,
+                            style: const TextStyle(
+                              color: verde,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Bienvenido a tu espacio de trabajo',
+                            style: TextStyle(
+                              color: vinotintoMedio,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 26),
+              const Text(
+                'MENÚ PRINCIPAL',
+                style: TextStyle(
+                  color: crema,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const SizedBox(height: 14),
+              ...opciones.map(
+                (opcion) => Padding(
+                  padding: const EdgeInsets.only(bottom: 13),
+                  child: Card(
+                    color: crema,
+                    elevation: 3,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 10,
+                      ),
+                      leading: Icon(opcion.icono, color: verde, size: 30),
+                      title: Text(
+                        opcion.titulo,
+                        style: const TextStyle(
+                          color: verde,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      subtitle: Padding(
+                        padding: const EdgeInsets.only(top: 5),
+                        child: Text(
+                          opcion.descripcion,
+                          style: const TextStyle(
+                            color: vinotintoMedio,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      trailing: const Icon(
+                        Icons.chevron_right_rounded,
+                        color: verde,
+                      ),
+                      onTap: () {
+                        if (esEstudiante &&
+                            opcion.titulo == 'Escanear código QR') {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const EscanearQrScreen(),
+                            ),
+                          );
+                          return;
+                        }
+
+                        if (esEstudiante && opcion.titulo == 'Mi asistencia') {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const MiAsistenciaScreen(),
+                            ),
+                          );
+                          return;
+                        }
+
+                        if (esEstudiante && opcion.titulo == 'Historial') {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const HistorialEstudianteScreen(),
+                            ),
+                          );
+                          return;
+                        }
+
+                        if (esEstudiante && opcion.titulo == 'Mis clases') {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const MisClasesEstudianteScreen(),
+                            ),
+                          );
+                          return;
+                        }
+
+                        if (!esEstudiante && opcion.titulo == 'Mis clases') {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const MisClasesScreen(),
+                            ),
+                          );
+                          return;
+                        }
+
+                        if (!esEstudiante &&
+                            opcion.titulo == 'Generar código QR') {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const GenerarQrScreen(),
+                            ),
+                          );
+                          return;
+                        }
+
+                        if (!esEstudiante && opcion.titulo == 'Estudiantes') {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const EstudiantesScreen(),
+                            ),
+                          );
+                          return;
+                        }
+
+                        if (!esEstudiante && opcion.titulo == 'Reportes') {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const ReportesDocenteScreen(),
+                            ),
+                          );
+                          return;
+                        }
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              '${opcion.titulo}: '
+                              'esta función se implementará próximamente.',
+                            ),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Center(
+                child: Text(
+                  'Asistencia Virtual · Tu asistencia, organizada.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: crema, fontSize: 12),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

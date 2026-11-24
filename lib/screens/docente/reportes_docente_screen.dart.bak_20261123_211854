@@ -1,0 +1,806 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
+import 'package:asistencia_qr/core/theme/app_theme.dart';
+import 'package:asistencia_qr/core/widgets/fondo_vinotinto.dart';
+
+class ReportesDocenteScreen extends StatefulWidget {
+  const ReportesDocenteScreen({super.key});
+
+  @override
+  State<ReportesDocenteScreen> createState() => _ReportesDocenteScreenState();
+}
+
+class _ReportesDocenteScreenState extends State<ReportesDocenteScreen> {
+  String? _claseSeleccionada;
+
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _clasesStream;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _inscripcionesStream;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _sesionesStream;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _asistenciasStream;
+
+  @override
+  void initState() {
+    super.initState();
+
+    final usuario = FirebaseAuth.instance.currentUser;
+    final db = FirebaseFirestore.instance;
+
+    if (usuario == null) {
+      _clasesStream = const Stream<QuerySnapshot<Map<String, dynamic>>>.empty();
+      _inscripcionesStream =
+          const Stream<QuerySnapshot<Map<String, dynamic>>>.empty();
+      _sesionesStream =
+          const Stream<QuerySnapshot<Map<String, dynamic>>>.empty();
+      _asistenciasStream =
+          const Stream<QuerySnapshot<Map<String, dynamic>>>.empty();
+    } else {
+      _clasesStream = db
+          .collection('clases')
+          .where('docenteId', isEqualTo: usuario.uid)
+          .snapshots();
+
+      _inscripcionesStream = db
+          .collection('inscripciones')
+          .where('docenteId', isEqualTo: usuario.uid)
+          .snapshots();
+
+      _sesionesStream = db
+          .collection('sesiones_qr')
+          .where('docenteId', isEqualTo: usuario.uid)
+          .snapshots();
+
+      _asistenciasStream = db
+          .collection('asistencias')
+          .where('docenteId', isEqualTo: usuario.uid)
+          .snapshots();
+    }
+  }
+
+  Timestamp? _obtenerFecha(dynamic valor) {
+    if (valor is Timestamp) return valor;
+    return null;
+  }
+
+  String _formatearFecha(dynamic valor) {
+    final fecha = _obtenerFecha(valor)?.toDate();
+    if (fecha == null) return 'Fecha no disponible';
+
+    final dia = fecha.day.toString().padLeft(2, '0');
+    final mes = fecha.month.toString().padLeft(2, '0');
+    final anio = fecha.year.toString();
+    final hora = fecha.hour.toString().padLeft(2, '0');
+    final minuto = fecha.minute.toString().padLeft(2, '0');
+
+    return '$dia/$mes/$anio · $hora:$minuto';
+  }
+
+  Widget _tarjetaResumen({
+    required String titulo,
+    required int cantidad,
+    required IconData icono,
+    required String descripcion,
+  }) {
+    return Card(
+      color: crema,
+      elevation: 2,
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: verde.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(13),
+              ),
+              child: Icon(icono, color: verde, size: 27),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    titulo,
+                    style: const TextStyle(
+                      color: vinotintoMedio,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    descripcion,
+                    style: const TextStyle(color: vinotintoMedio, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+            Text(
+              cantidad.toString(),
+              style: const TextStyle(
+                color: verde,
+                fontSize: 25,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _cargando() {
+    return const Center(child: CircularProgressIndicator(color: crema));
+  }
+
+  Widget _error(String mensaje) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Text(
+          mensaje,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: crema, fontSize: 14),
+        ),
+      ),
+    );
+  }
+
+  Widget _construirDetalleSesion({
+    required QueryDocumentSnapshot<Map<String, dynamic>> sesion,
+    required List<QueryDocumentSnapshot<Map<String, dynamic>>> inscritos,
+    required List<QueryDocumentSnapshot<Map<String, dynamic>>> asistencias,
+  }) {
+    final datosSesion = sesion.data();
+    final fechaExpiracion = _obtenerFecha(datosSesion['fechaExpiracion'])
+        ?.toDate();
+    final ahora = DateTime.now();
+
+    final finalizada =
+        fechaExpiracion != null && !ahora.isBefore(fechaExpiracion);
+    final cancelada = datosSesion['activa'] == false && !finalizada;
+
+    final asistenciasSesion = asistencias.where((documento) {
+      final datos = documento.data();
+      return datos['sesionId'] == sesion.id &&
+          datos['claseId'] == datosSesion['claseId'];
+    }).toList();
+
+    final presentes = <String>{};
+
+    for (final asistencia in asistenciasSesion) {
+      final id = asistencia.data()['estudianteId']?.toString();
+      if (id != null && id.isNotEmpty) presentes.add(id);
+    }
+
+    final estudiantesInscritos = inscritos.where((documento) {
+      final datos = documento.data();
+      return datos['claseId'] == datosSesion['claseId'] &&
+          datos['estado'] == 'Activa';
+    }).toList();
+
+    final totalInscritos = estudiantesInscritos.length;
+
+    final presentesInscritos = estudiantesInscritos.where((documento) {
+      return presentes.contains(documento.data()['estudianteId']?.toString());
+    }).length;
+
+    final ausentes = finalizada ? totalInscritos - presentesInscritos : 0;
+
+    final porcentaje = totalInscritos == 0
+        ? 0.0
+        : (presentesInscritos / totalInscritos) * 100;
+
+    final estado = finalizada
+        ? 'Finalizada'
+        : cancelada
+        ? 'Cancelada'
+        : 'En curso';
+
+    final colorEstado = finalizada
+        ? verde
+        : cancelada
+        ? vinotintoMedio
+        : Colors.orange.shade800;
+
+    return Card(
+      color: crema,
+      margin: const EdgeInsets.only(bottom: 13),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        leading: const Icon(
+          Icons.calendar_month_rounded,
+          color: verde,
+          size: 28,
+        ),
+        title: Text(
+          'Sesión · ${datosSesion['salon'] ?? 'Sin salón'}',
+          style: const TextStyle(color: verde, fontWeight: FontWeight.bold),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 5),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _formatearFecha(datosSesion['fechaCreacion']),
+                style: const TextStyle(color: vinotintoMedio, fontSize: 12),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                estado,
+                style: TextStyle(
+                  color: colorEstado,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+        children: [
+          const Divider(color: bordeCrema),
+          Row(
+            children: [
+              Expanded(
+                child: _datoSesion(
+                  'Inscritos',
+                  totalInscritos,
+                  Icons.people_alt_rounded,
+                ),
+              ),
+              Expanded(
+                child: _datoSesion(
+                  'Presentes',
+                  presentesInscritos,
+                  Icons.check_circle_outline_rounded,
+                ),
+              ),
+              if (finalizada)
+                Expanded(
+                  child: _datoSesion(
+                    'Ausentes',
+                    ausentes,
+                    Icons.person_off_rounded,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 15),
+          if (finalizada) ...[
+            Text(
+              'Porcentaje de asistencia: ${porcentaje.toStringAsFixed(1)}%',
+              style: const TextStyle(
+                color: verde,
+                fontWeight: FontWeight.bold,
+                fontSize: 15,
+              ),
+            ),
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: LinearProgressIndicator(
+                value: porcentaje / 100,
+                minHeight: 9,
+                backgroundColor: bordeCrema,
+                color: verde,
+              ),
+            ),
+          ] else if (cancelada) ...[
+            const Text(
+              'Esta sesión fue cancelada antes de su vencimiento. '
+              'No se contabilizan estudiantes ausentes.',
+              style: TextStyle(color: vinotintoMedio, fontSize: 12),
+            ),
+          ] else ...[
+            const Text(
+              'La sesión todavía no ha finalizado. '
+              'Los ausentes se determinarán cuando venza el código QR.',
+              style: TextStyle(color: vinotintoMedio, fontSize: 12),
+            ),
+          ],
+          const SizedBox(height: 15),
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Detalle de estudiantes',
+              style: TextStyle(
+                color: verde,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (estudiantesInscritos.isEmpty)
+            const Text(
+              'No hay estudiantes inscritos en esta clase.',
+              style: TextStyle(color: vinotintoMedio, fontSize: 12),
+            )
+          else
+            ...estudiantesInscritos.map((documento) {
+              final datos = documento.data();
+              final estudianteId = datos['estudianteId']?.toString() ?? '';
+              final nombre =
+                  datos['estudianteNombre']?.toString() ??
+                  'Estudiante sin nombre';
+              final asistio = presentes.contains(estudianteId);
+
+              final textoEstado = asistio
+                  ? 'Presente'
+                  : finalizada
+                  ? 'Ausente'
+                  : 'Pendiente';
+
+              final color = asistio
+                  ? verde
+                  : finalizada
+                  ? Colors.red.shade700
+                  : Colors.orange.shade800;
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Row(
+                  children: [
+                    Icon(
+                      asistio
+                          ? Icons.check_circle_rounded
+                          : finalizada
+                          ? Icons.cancel_rounded
+                          : Icons.schedule_rounded,
+                      color: color,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 9),
+                    Expanded(
+                      child: Text(
+                        nombre,
+                        style: const TextStyle(
+                          color: vinotintoMedio,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      textoEstado,
+                      style: TextStyle(
+                        color: color,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
+  Widget _datoSesion(String titulo, int cantidad, IconData icono) {
+    return Column(
+      children: [
+        Icon(icono, color: verde, size: 22),
+        const SizedBox(height: 5),
+        Text(
+          cantidad.toString(),
+          style: const TextStyle(
+            color: verde,
+            fontWeight: FontWeight.bold,
+            fontSize: 20,
+          ),
+        ),
+        Text(
+          titulo,
+          style: const TextStyle(color: vinotintoMedio, fontSize: 11),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (FirebaseAuth.instance.currentUser == null) {
+      return const Scaffold(body: Center(child: Text('Debes iniciar sesión.')));
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Reportes de asistencia',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        backgroundColor: crema,
+        foregroundColor: verde,
+      ),
+      body: FondoVinotinto(
+        child: SafeArea(
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _clasesStream,
+            builder: (context, clasesSnapshot) {
+              if (clasesSnapshot.hasError) {
+                return _error(
+                  'No se pudieron consultar tus clases. '
+                  'Verifica los permisos de Firestore.',
+                );
+              }
+              if (!clasesSnapshot.hasData) return _cargando();
+
+              final clases = clasesSnapshot.data!.docs;
+              if (clases.isEmpty) {
+                return _error('Todavía no tienes clases registradas.');
+              }
+
+              final seleccionValida = clases.any(
+                (clase) => clase.id == _claseSeleccionada,
+              );
+              final claseActual = seleccionValida
+                  ? _claseSeleccionada!
+                  : clases.first.id;
+
+              final datosClase = clases
+                  .firstWhere((clase) => clase.id == claseActual)
+                  .data();
+              final nombreClase = datosClase['nombre']?.toString() ?? 'Clase';
+              final grupo = datosClase['grupo']?.toString() ?? '';
+
+              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _inscripcionesStream,
+                builder: (context, inscripcionesSnapshot) {
+                  if (inscripcionesSnapshot.hasError) {
+                    return _error(
+                      'No se pudieron consultar las inscripciones.',
+                    );
+                  }
+                  if (!inscripcionesSnapshot.hasData) return _cargando();
+
+                  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: _sesionesStream,
+                    builder: (context, sesionesSnapshot) {
+                      if (sesionesSnapshot.hasError) {
+                        return _error(
+                          'No se pudieron consultar las sesiones QR.',
+                        );
+                      }
+                      if (!sesionesSnapshot.hasData) return _cargando();
+
+                      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                        stream: _asistenciasStream,
+                        builder: (context, asistenciasSnapshot) {
+                          if (asistenciasSnapshot.hasError) {
+                            return _error(
+                              'No se pudieron consultar las asistencias.',
+                            );
+                          }
+                          if (!asistenciasSnapshot.hasData) return _cargando();
+
+                          final inscritos = inscripcionesSnapshot.data!.docs;
+                          final sesiones = sesionesSnapshot.data!.docs
+                              .where(
+                                (sesion) =>
+                                    sesion.data()['claseId'] == claseActual,
+                              )
+                              .toList();
+
+                          final asistencias = asistenciasSnapshot.data!.docs;
+
+                          sesiones.sort((a, b) {
+                            final fechaA =
+                                _obtenerFecha(a.data()['fechaCreacion'])
+                                    ?.millisecondsSinceEpoch ??
+                                0;
+                            final fechaB =
+                                _obtenerFecha(b.data()['fechaCreacion'])
+                                    ?.millisecondsSinceEpoch ??
+                                0;
+                            return fechaB.compareTo(fechaA);
+                          });
+
+                          final inscritosClase = inscritos.where((doc) {
+                            final datos = doc.data();
+                            return datos['claseId'] == claseActual &&
+                                datos['estado'] == 'Activa';
+                          }).toList();
+
+                          final idsSesiones = sesiones
+                              .map((sesion) => sesion.id)
+                              .toSet();
+
+                          final asistenciasClase = asistencias.where((doc) {
+                            return idsSesiones.contains(doc.data()['sesionId']);
+                          }).toList();
+
+                          final totalEstudiantes = inscritosClase.length;
+
+                          final sesionesFinalizadas = sesiones.where((sesion) {
+                            final fecha = _obtenerFecha(
+                              sesion.data()['fechaExpiracion'],
+                            )?.toDate();
+                            return fecha != null &&
+                                !DateTime.now().isBefore(fecha);
+                          }).toList();
+
+                          final totalSesionesFinalizadas =
+                              sesionesFinalizadas.length;
+
+                          final idsEstudiantesInscritos = inscritosClase
+                              .map(
+                                (doc) => doc.data()['estudianteId']?.toString(),
+                              )
+                              .where((id) => id != null && id.isNotEmpty)
+                              .toSet();
+
+                          final idsPresentes = <String>{};
+
+                          for (final asistencia in asistenciasClase) {
+                            final datos = asistencia.data();
+                            final sesionId = datos['sesionId']?.toString();
+                            final estudianteId = datos['estudianteId']
+                                ?.toString();
+
+                            final sesionFinalizada = sesionesFinalizadas.any(
+                              (sesion) => sesion.id == sesionId,
+                            );
+
+                            if (sesionFinalizada &&
+                                estudianteId != null &&
+                                idsEstudiantesInscritos.contains(
+                                  estudianteId,
+                                )) {
+                              idsPresentes.add('$sesionId|$estudianteId');
+                            }
+                          }
+
+                          final totalRegistrosPresentes = idsPresentes.length;
+                          final totalPosiblesAsistencias =
+                              totalEstudiantes * totalSesionesFinalizadas;
+
+                          final porcentajeGeneral =
+                              totalPosiblesAsistencias == 0
+                              ? 0.0
+                              : (totalRegistrosPresentes /
+                                        totalPosiblesAsistencias) *
+                                    100;
+
+                          return ListView(
+                            padding: const EdgeInsets.all(18),
+                            children: [
+                              const Text(
+                                'REPORTES DEL DOCENTE',
+                                style: TextStyle(
+                                  color: crema,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.4,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Consulta el resumen de asistencia '
+                                'de tus clases y revisa cada sesión.',
+                                style: TextStyle(
+                                  color: crema,
+                                  fontSize: 14,
+                                  height: 1.5,
+                                ),
+                              ),
+                              const SizedBox(height: 22),
+                              Container(
+                                padding: const EdgeInsets.all(17),
+                                decoration: BoxDecoration(
+                                  color: crema,
+                                  borderRadius: BorderRadius.circular(18),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    const Text(
+                                      'Seleccionar clase',
+                                      style: TextStyle(
+                                        color: verde,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    DropdownButtonFormField<String>(
+                                      initialValue: claseActual,
+                                      isExpanded: true,
+                                      decoration: InputDecoration(
+                                        filled: true,
+                                        fillColor: cremaClaro,
+                                        prefixIcon: const Icon(
+                                          Icons.menu_book_rounded,
+                                          color: verde,
+                                        ),
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            13,
+                                          ),
+                                        ),
+                                      ),
+                                      items: clases.map((clase) {
+                                        final datos = clase.data();
+                                        final nombre =
+                                            datos['nombre']?.toString() ??
+                                            'Sin nombre';
+                                        final grupoClase =
+                                            datos['grupo']?.toString() ?? '';
+                                        return DropdownMenuItem<String>(
+                                          value: clase.id,
+                                          child: Text(
+                                            grupoClase.isEmpty
+                                                ? nombre
+                                                : '$nombre · $grupoClase',
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        );
+                                      }).toList(),
+                                      onChanged: (valor) {
+                                        if (valor == null) return;
+                                        setState(() {
+                                          _claseSeleccionada = valor;
+                                        });
+                                      },
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      grupo.isEmpty
+                                          ? nombreClase
+                                          : '$nombreClase · Grupo $grupo',
+                                      style: const TextStyle(
+                                        color: vinotintoMedio,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              const Text(
+                                'RESUMEN DE LA CLASE',
+                                style: TextStyle(
+                                  color: crema,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                  letterSpacing: 1.2,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              _tarjetaResumen(
+                                titulo: 'Estudiantes inscritos',
+                                cantidad: totalEstudiantes,
+                                icono: Icons.people_alt_rounded,
+                                descripcion: 'Matrículas activas',
+                              ),
+                              _tarjetaResumen(
+                                titulo: 'Sesiones realizadas',
+                                cantidad: totalSesionesFinalizadas,
+                                icono: Icons.event_available_rounded,
+                                descripcion: 'Códigos QR vencidos',
+                              ),
+                              _tarjetaResumen(
+                                titulo: 'Registros de asistencia',
+                                cantidad: totalRegistrosPresentes,
+                                icono: Icons.fact_check_rounded,
+                                descripcion:
+                                    'Asistencias en sesiones finalizadas',
+                              ),
+                              Card(
+                                color: crema,
+                                margin: const EdgeInsets.only(bottom: 12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(17),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Porcentaje general de asistencia',
+                                        style: TextStyle(
+                                          color: vinotintoMedio,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Text(
+                                        '${porcentajeGeneral.toStringAsFixed(1)}%',
+                                        style: const TextStyle(
+                                          color: verde,
+                                          fontSize: 30,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: LinearProgressIndicator(
+                                          value: (porcentajeGeneral / 100)
+                                              .clamp(0.0, 1.0),
+                                          minHeight: 10,
+                                          backgroundColor: bordeCrema,
+                                          color: verde,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 7),
+                                      const Text(
+                                        'Calculado sobre las sesiones finalizadas '
+                                        'y los estudiantes inscritos actualmente.',
+                                        style: TextStyle(
+                                          color: vinotintoMedio,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 18),
+                              const Text(
+                                'DETALLE POR SESIÓN',
+                                style: TextStyle(
+                                  color: crema,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                  letterSpacing: 1.2,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              if (sesiones.isEmpty)
+                                Container(
+                                  padding: const EdgeInsets.all(20),
+                                  decoration: BoxDecoration(
+                                    color: crema,
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: const Text(
+                                    'Todavía no hay sesiones QR '
+                                    'registradas para esta clase.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(color: vinotintoMedio),
+                                  ),
+                                )
+                              else
+                                ...sesiones.map((sesion) {
+                                  return _construirDetalleSesion(
+                                    sesion: sesion,
+                                    inscritos: inscritos,
+                                    asistencias: asistencias,
+                                  );
+                                }),
+                              const SizedBox(height: 12),
+                              const Center(
+                                child: Text(
+                                  'Asistencia Virtual',
+                                  style: TextStyle(
+                                    color: crema,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}

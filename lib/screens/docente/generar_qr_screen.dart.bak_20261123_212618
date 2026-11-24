@@ -1,0 +1,725 @@
+import 'dart:async';
+import 'dart:math';
+
+import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:geolocator/geolocator.dart';
+
+import 'package:asistencia_qr/core/theme/app_theme.dart';
+import 'package:asistencia_qr/core/widgets/fondo_vinotinto.dart';
+
+class GenerarQrScreen extends StatefulWidget {
+  const GenerarQrScreen({super.key});
+
+  @override
+  State<GenerarQrScreen> createState() => _GenerarQrScreenState();
+}
+
+class _GenerarQrScreenState extends State<GenerarQrScreen> {
+  String? _claseSeleccionada;
+  String? _salonSeleccionado;
+
+  String? _nombreClase;
+  String? _grupoClase;
+
+  String? _token;
+  String? _sesionId;
+
+  Timer? _temporizador;
+
+  static const int _duracionSegundos = 180;
+
+  final ValueNotifier<int> _contador = ValueNotifier<int>(_duracionSegundos);
+
+  bool _generando = false;
+  String? _error;
+
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _clasesStream;
+
+  @override
+  void initState() {
+    super.initState();
+
+    final usuario = FirebaseAuth.instance.currentUser;
+
+    _clasesStream = usuario == null
+        ? const Stream<QuerySnapshot<Map<String, dynamic>>>.empty()
+        : FirebaseFirestore.instance
+              .collection('clases')
+              .where('docenteId', isEqualTo: usuario.uid)
+              .snapshots();
+  }
+
+  @override
+  void dispose() {
+    _temporizador?.cancel();
+    _contador.dispose();
+    super.dispose();
+  }
+
+  // Compatible con clases nuevas y antiguas.
+  List<String> _obtenerSalones(Map<String, dynamic> datos) {
+    final salonesGuardados = datos['salones'];
+
+    if (salonesGuardados is List) {
+      final resultado = salonesGuardados
+          .whereType<String>()
+          .map((salon) => salon.trim())
+          .where((salon) => salon.isNotEmpty)
+          .toSet()
+          .toList();
+
+      if (resultado.isNotEmpty) {
+        return resultado;
+      }
+    }
+
+    final salonAnterior = datos['salon'];
+
+    if (salonAnterior is String && salonAnterior.trim().isNotEmpty) {
+      return salonAnterior
+          .split(',')
+          .map((salon) => salon.trim())
+          .where((salon) => salon.isNotEmpty)
+          .toSet()
+          .toList();
+    }
+
+    return [];
+  }
+
+  String _crearToken() {
+    final aleatorio = Random.secure();
+    final bytes = List<int>.generate(32, (_) => aleatorio.nextInt(256));
+
+    return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  Future<Position> _obtenerUbicacionDocente() async {
+    final servicioActivo = await Geolocator.isLocationServiceEnabled();
+
+    if (!servicioActivo) {
+      throw Exception('Activa la ubicación GPS para generar el código QR.');
+    }
+
+    LocationPermission permiso = await Geolocator.checkPermission();
+
+    if (permiso == LocationPermission.denied) {
+      permiso = await Geolocator.requestPermission();
+    }
+
+    if (permiso == LocationPermission.denied) {
+      throw Exception(
+        'Debes permitir el acceso a la ubicación para generar el QR.',
+      );
+    }
+
+    if (permiso == LocationPermission.deniedForever) {
+      throw Exception(
+        'El permiso de ubicación está bloqueado. '
+        'Actívalo desde los ajustes de la aplicación.',
+      );
+    }
+
+    final posicion = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 20),
+      ),
+    );
+
+    //TEMPORALMENTE
+    debugPrint(
+      'GPS DOCENTE: '
+      'lat=${posicion.latitude}, '
+      'lon=${posicion.longitude}, '
+      'precision=${posicion.accuracy} metros',
+    );
+
+    if (posicion.accuracy > 100) {
+      throw Exception(
+        'La ubicación del dispositivo no es suficientemente precisa. '
+        'Precisión actual: '
+        '${posicion.accuracy.toStringAsFixed(0)} metros. '
+        'Intenta nuevamente o utiliza un dispositivo con GPS.',
+      );
+    }
+
+    return posicion;
+  }
+
+  void _mostrarMensaje(String mensaje) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(mensaje), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  Future<void> _generarCodigo() async {
+    final claseId = _claseSeleccionada;
+    final salon = _salonSeleccionado;
+
+    if (claseId == null || salon == null || _generando) {
+      setState(() {
+        _error = 'Selecciona una clase y un salón antes de continuar.';
+      });
+      return;
+    }
+
+    final usuario = FirebaseAuth.instance.currentUser;
+
+    if (usuario == null) {
+      setState(() {
+        _error = 'Debes iniciar sesión para generar un código.';
+      });
+      return;
+    }
+
+    setState(() {
+      _generando = true;
+      _error = null;
+    });
+
+    try {
+      final baseDatos = FirebaseFirestore.instance;
+
+      final perfil = await baseDatos
+          .collection('usuarios')
+          .doc(usuario.uid)
+          .get();
+
+      if (!perfil.exists || perfil.data()?['rol'] != 'Docente') {
+        throw Exception('Solo los docentes pueden generar códigos QR.');
+      }
+
+      final referenciaClase = baseDatos.collection('clases').doc(claseId);
+
+      final documentoClase = await referenciaClase.get();
+
+      if (!documentoClase.exists ||
+          documentoClase.data()?['docenteId'] != usuario.uid ||
+          documentoClase.data()?['activa'] != true) {
+        throw Exception('La clase no existe o no está disponible.');
+      }
+
+      final datosClase = documentoClase.data()!;
+      final salonesDisponibles = _obtenerSalones(datosClase);
+
+      if (!salonesDisponibles.contains(salon)) {
+        throw Exception(
+          'El salón seleccionado ya no pertenece a esta clase. '
+          'Selecciona la clase y el salón nuevamente.',
+        );
+      }
+
+      final token = _crearToken();
+      final ahora = DateTime.now();
+      final vencimiento = ahora.add(const Duration(seconds: _duracionSegundos));
+
+      final posicionDocente = await _obtenerUbicacionDocente();
+
+      final referenciaSesion = baseDatos.collection('sesiones_qr').doc();
+
+      await referenciaSesion.set({
+        'token': token,
+        'claseId': claseId,
+        'salon': salon,
+        'docenteId': usuario.uid,
+        'activa': true,
+        'fechaCreacion': Timestamp.fromDate(ahora),
+        'fechaExpiracion': Timestamp.fromDate(vencimiento),
+        //Ubicación del docente al crear la sesión. Se puede usar para validar la asistencia del estudiante.
+        'latitudDocente': posicionDocente.latitude,
+        'longitudDocente': posicionDocente.longitude,
+        'precisionGpsDocente': posicionDocente.accuracy,
+      });
+
+      if (!mounted) return;
+
+      _temporizador?.cancel();
+      _contador.value = _duracionSegundos;
+
+      setState(() {
+        _token = token;
+        _sesionId = referenciaSesion.id;
+        _nombreClase = datosClase['nombre']?.toString() ?? 'Clase';
+        _grupoClase = datosClase['grupo']?.toString() ?? '';
+      });
+
+      _temporizador = Timer.periodic(const Duration(seconds: 1), (timer) async {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+
+        if (_contador.value <= 1) {
+          timer.cancel();
+          _contador.value = 0;
+
+          setState(() {
+            _token = null;
+            _sesionId = null;
+          });
+
+          try {
+            await referenciaSesion.update({'activa': false});
+          } catch (_) {
+            // La validez también debe comprobarse al registrar
+            // la asistencia del estudiante.
+          }
+        } else {
+          _contador.value--;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _error = e is FirebaseException
+            ? 'Firebase no permitió generar el código: '
+                  '${e.message ?? e.code}'
+            : e.toString().replaceFirst('Exception: ', '');
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _generando = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _desactivarSesion(String sesionId) async {
+    await FirebaseFirestore.instance
+        .collection('sesiones_qr')
+        .doc(sesionId)
+        .update({'activa': false});
+  }
+
+  Future<void> _cancelarCodigo() async {
+    _temporizador?.cancel();
+
+    final sesionId = _sesionId;
+
+    setState(() {
+      _token = null;
+      _sesionId = null;
+    });
+
+    _contador.value = 0;
+
+    if (sesionId == null) return;
+
+    try {
+      await _desactivarSesion(sesionId);
+    } catch (_) {
+      if (!mounted) return;
+
+      _mostrarMensaje(
+        'El QR se ocultó, pero no se pudo desactivar en Firebase.',
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final usuario = FirebaseAuth.instance.currentUser;
+
+    if (usuario == null) {
+      return const Scaffold(body: Center(child: Text('Debes iniciar sesión.')));
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Generar código QR',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        backgroundColor: crema,
+        foregroundColor: verde,
+      ),
+      body: FondoVinotinto(
+        child: SafeArea(
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _clasesStream,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'No se pudieron cargar tus clases. '
+                      'Revisa tu conexión y los permisos de Firebase.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: crema),
+                    ),
+                  ),
+                );
+              }
+
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(
+                  child: CircularProgressIndicator(color: crema),
+                );
+              }
+
+              final clases = (snapshot.data?.docs ?? [])
+                  .where((documento) => documento.data()['activa'] == true)
+                  .toList();
+
+              if (clases.isEmpty) {
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(28),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.menu_book_rounded, color: crema, size: 64),
+                        SizedBox(height: 16),
+                        Text(
+                          'No tienes clases activas',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: crema,
+                            fontSize: 21,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        SizedBox(height: 10),
+                        Text(
+                          'Primero crea una clase en la sección Mis clases.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: crema),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              final existeSeleccion = clases.any(
+                (clase) => clase.id == _claseSeleccionada,
+              );
+
+              final seleccion = existeSeleccion ? _claseSeleccionada : null;
+
+              QueryDocumentSnapshot<Map<String, dynamic>>? claseActual;
+
+              for (final clase in clases) {
+                if (clase.id == seleccion) {
+                  claseActual = clase;
+                  break;
+                }
+              }
+
+              final salonesDisponibles = claseActual == null
+                  ? <String>[]
+                  : _obtenerSalones(claseActual.data());
+
+              final salonValido =
+                  salonesDisponibles.contains(_salonSeleccionado)
+                  ? _salonSeleccionado
+                  : null;
+
+              return ListView(
+                padding: const EdgeInsets.all(22),
+                children: [
+                  const Text(
+                    'REGISTRO DE ASISTENCIA',
+                    style: TextStyle(
+                      color: crema,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.4,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Selecciona la clase y el salón donde '
+                    'se realizará la asistencia.',
+                    style: TextStyle(color: crema, fontSize: 14, height: 1.5),
+                  ),
+                  const SizedBox(height: 24),
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: crema,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Text(
+                          'Clase',
+                          style: TextStyle(
+                            color: verde,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        DropdownButtonFormField<String>(
+                          initialValue: seleccion,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: cremaClaro,
+                            prefixIcon: const Icon(
+                              Icons.menu_book_rounded,
+                              color: verde,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          hint: const Text('Selecciona una clase'),
+                          items: clases.map((clase) {
+                            final datos = clase.data();
+                            final nombre =
+                                datos['nombre']?.toString() ?? 'Sin nombre';
+                            final grupo = datos['grupo']?.toString() ?? '';
+
+                            return DropdownMenuItem<String>(
+                              value: clase.id,
+                              child: Text(
+                                grupo.isEmpty ? nombre : '$nombre · $grupo',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: _token != null || _generando
+                              ? null
+                              : (valor) {
+                                  setState(() {
+                                    _claseSeleccionada = valor;
+                                    _salonSeleccionado = null;
+                                    _error = null;
+                                  });
+                                },
+                        ),
+                        const SizedBox(height: 20),
+
+                        const Text(
+                          'Salón o aula',
+                          style: TextStyle(
+                            color: verde,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+
+                        DropdownButtonFormField<String>(
+                          initialValue: salonValido,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: cremaClaro,
+                            prefixIcon: const Icon(
+                              Icons.location_on_outlined,
+                              color: verde,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          hint: Text(
+                            seleccion == null
+                                ? 'Primero selecciona una clase'
+                                : salonesDisponibles.isEmpty
+                                ? 'Esta clase no tiene salones'
+                                : 'Selecciona un salón',
+                          ),
+                          items: salonesDisponibles.map((salon) {
+                            return DropdownMenuItem<String>(
+                              value: salon,
+                              child: Text(salon),
+                            );
+                          }).toList(),
+                          onChanged:
+                              seleccion == null ||
+                                  salonesDisponibles.isEmpty ||
+                                  _token != null ||
+                                  _generando
+                              ? null
+                              : (valor) {
+                                  setState(() {
+                                    _salonSeleccionado = valor;
+                                    _error = null;
+                                  });
+                                },
+                        ),
+
+                        if (seleccion != null &&
+                            salonesDisponibles.isEmpty) ...[
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Edita esta clase en Mis clases y registra '
+                            'al menos un salón.',
+                            style: TextStyle(
+                              color: vinotintoMedio,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+
+                        const SizedBox(height: 20),
+
+                        if (_error != null) ...[
+                          Text(
+                            _error!,
+                            style: const TextStyle(
+                              color: Colors.red,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+
+                        if (_token == null)
+                          SizedBox(
+                            height: 52,
+                            child: ElevatedButton.icon(
+                              onPressed:
+                                  seleccion == null ||
+                                      salonValido == null ||
+                                      _generando
+                                  ? null
+                                  : _generarCodigo,
+                              icon: _generando
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: crema,
+                                      ),
+                                    )
+                                  : const Icon(Icons.qr_code_2_rounded),
+                              label: Text(
+                                _generando
+                                    ? 'Generando...'
+                                    : 'Generar código QR',
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: verde,
+                                foregroundColor: crema,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                            ),
+                          )
+                        else
+                          Center(
+                            child: Column(
+                              children: [
+                                const Icon(
+                                  Icons.verified_rounded,
+                                  color: verde,
+                                  size: 32,
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  _nombreClase ?? 'Clase seleccionada',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: verde,
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                if (_grupoClase != null &&
+                                    _grupoClase!.isNotEmpty)
+                                  Text(
+                                    'Grupo: $_grupoClase',
+                                    style: const TextStyle(
+                                      color: vinotintoMedio,
+                                    ),
+                                  ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Salón: ${_salonSeleccionado ?? 'No definido'}',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: vinotintoMedio,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 18),
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: bordeCrema),
+                                  ),
+                                  child: RepaintBoundary(
+                                    child: QrImageView(
+                                      data: _token!,
+                                      version: QrVersions.auto,
+                                      size: 230,
+                                      backgroundColor: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 18),
+                                ValueListenableBuilder<int>(
+                                  valueListenable: _contador,
+                                  builder: (context, segundos, child) {
+                                    return Text(
+                                      '00:${segundos.toString().padLeft(2, '0')}',
+                                      style: const TextStyle(
+                                        color: verde,
+                                        fontSize: 32,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    );
+                                  },
+                                ),
+                                const Text(
+                                  'Tiempo restante',
+                                  style: TextStyle(color: vinotintoMedio),
+                                ),
+                                const SizedBox(height: 18),
+                                SizedBox(
+                                  height: 48,
+                                  child: OutlinedButton.icon(
+                                    onPressed: _cancelarCodigo,
+                                    icon: const Icon(
+                                      Icons.stop_circle_outlined,
+                                    ),
+                                    label: const Text('Cancelar código'),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: vinotintoMedio,
+                                      side: const BorderSide(
+                                        color: vinotintoMedio,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'El código tiene una vigencia de 3 minutos. '
+                    'La sesión queda asociada a la clase y al salón '
+                    'seleccionados. La aplicación del estudiante deberá '
+                    'verificar su validez antes de registrar asistencia.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: crema, fontSize: 12, height: 1.5),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}

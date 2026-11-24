@@ -1,0 +1,408 @@
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ==========================================
+    // FUNCIONES DE AUTORIZACION
+    // ==========================================
+
+    function autenticado() {
+      return request.auth != null;
+    }
+
+    function existePerfil() {
+      return autenticado()
+        && exists(
+          /databases/$(database)/documents/usuarios/$(request.auth.uid)
+        );
+    }
+
+    function esEstudiante() {
+      return existePerfil()
+        && get(
+          /databases/$(database)/documents/usuarios/$(request.auth.uid)
+        ).data.rol == 'Estudiante';
+    }
+
+    function esDocente() {
+      return existePerfil()
+        && get(
+          /databases/$(database)/documents/usuarios/$(request.auth.uid)
+        ).data.rol == 'Docente';
+    }
+
+    function esAdministrador() {
+      return existePerfil()
+        && get(
+          /databases/$(database)/documents/usuarios/$(request.auth.uid)
+        ).data.rol == 'Administrador';
+    }
+
+    function esClasePropia(claseId) {
+      return autenticado()
+        && exists(
+          /databases/$(database)/documents/clases/$(claseId)
+        )
+        && get(
+          /databases/$(database)/documents/clases/$(claseId)
+        ).data.docenteId == request.auth.uid;
+    }
+
+    // ==========================================
+    // USUARIOS
+    // ==========================================
+
+    match /usuarios/{userId} {
+
+      allow read: if autenticado()
+        && (
+          request.auth.uid == userId
+          || esAdministrador()
+        );
+
+      // El registro público solamente crea estudiantes.
+      allow create: if autenticado()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll([
+          'nombre',
+          'correo',
+          'rol',
+          'fechaCreacion'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'nombre',
+          'correo',
+          'rol',
+          'fechaCreacion'
+        ])
+        && request.resource.data.nombre is string
+        && request.resource.data.correo is string
+        && request.resource.data.rol == 'Estudiante'
+        && request.resource.data.fechaCreacion is timestamp;
+
+      // El administrador puede cambiar roles,
+      // excepto el de su propia cuenta.
+      allow update: if esAdministrador()
+        && userId != request.auth.uid
+        && request.resource.data.diff(resource.data)
+          .affectedKeys().hasOnly(['rol'])
+        && request.resource.data.rol in [
+          'Estudiante',
+          'Docente'
+        ];
+
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // SOLICITUDES DOCENTES
+    // ==========================================
+
+    match /solicitudes_docente/{solicitudId} {
+
+      allow read: if autenticado()
+        && (
+          solicitudId == request.auth.uid
+          || esAdministrador()
+        );
+
+      allow create: if esEstudiante()
+        && solicitudId == request.auth.uid
+        && request.resource.data.keys().hasAll([
+          'usuarioId',
+          'nombre',
+          'correo',
+          'estado',
+          'fechaSolicitud'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'usuarioId',
+          'nombre',
+          'correo',
+          'estado',
+          'fechaSolicitud'
+        ])
+        && request.resource.data.usuarioId == request.auth.uid
+        && request.resource.data.nombre is string
+        && request.resource.data.correo is string
+        && request.resource.data.estado == 'Pendiente'
+        && request.resource.data.fechaSolicitud is timestamp;
+
+      allow update: if esAdministrador()
+        && resource.data.estado == 'Pendiente'
+        && request.resource.data.diff(resource.data)
+          .affectedKeys().hasOnly([
+            'estado',
+            'fechaRevision',
+            'revisadoPor'
+          ])
+        && request.resource.data.estado in [
+          'Aprobada',
+          'Rechazada'
+        ]
+        && request.resource.data.fechaRevision is timestamp
+        && request.resource.data.revisadoPor == request.auth.uid;
+
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // CLASES
+    // ==========================================
+
+    match /clases/{claseId} {
+
+      allow create: if esDocente()
+        && request.resource.data.keys().hasAll([
+          'nombre',
+          'grupo',
+          'salon',
+          'salones',
+          'docenteId',
+          'docenteNombre',
+          'activa',
+          'fechaCreacion'
+        ])
+        && request.resource.data.docenteId == request.auth.uid
+        && request.resource.data.nombre is string
+        && request.resource.data.grupo is string
+        && request.resource.data.salon is string
+        && request.resource.data.salones is list
+        && request.resource.data.docenteNombre is string
+        && request.resource.data.activa is bool
+        && request.resource.data.fechaCreacion is timestamp;
+
+      // El administrador puede consultar todas las clases.
+      allow read: if esAdministrador()
+        || (
+          esDocente()
+          && resource.data.docenteId == request.auth.uid
+        )
+        || (
+          esEstudiante()
+          && resource.data.activa == true
+        );
+
+      // El docente conserva su actualización.
+      // El administrador solamente puede activar/desactivar.
+      allow update: if (
+        esDocente()
+        && resource.data.docenteId == request.auth.uid
+        && request.resource.data.docenteId == request.auth.uid
+      )
+      || (
+        esAdministrador()
+        && request.resource.data.diff(resource.data)
+          .affectedKeys().hasOnly(['activa'])
+        && request.resource.data.activa is bool
+      );
+
+      allow delete: if esDocente()
+        && resource.data.docenteId == request.auth.uid;
+    }
+
+    // ==========================================
+    // INSCRIPCIONES
+    // ==========================================
+
+    match /inscripciones/{inscripcionId} {
+
+      allow create: if esEstudiante()
+        && inscripcionId == request.resource.data.claseId + '_' + request.auth.uid
+        && request.resource.data.keys().hasAll([
+          'estudianteId',
+          'estudianteNombre',
+          'claseId',
+          'claseNombre',
+          'grupo',
+          'docenteId',
+          'fechaInscripcion',
+          'estado'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'estudianteId',
+          'estudianteNombre',
+          'claseId',
+          'claseNombre',
+          'grupo',
+          'docenteId',
+          'fechaInscripcion',
+          'estado'
+        ])
+        && request.resource.data.estudianteId == request.auth.uid
+        && request.resource.data.estado == 'Activa'
+        && request.resource.data.fechaInscripcion is timestamp
+        && exists(
+          /databases/$(database)/documents/clases/$(request.resource.data.claseId)
+        )
+        && get(
+          /databases/$(database)/documents/clases/$(request.resource.data.claseId)
+        ).data.docenteId == request.resource.data.docenteId
+        && get(
+          /databases/$(database)/documents/clases/$(request.resource.data.claseId)
+        ).data.activa == true;
+
+      // El administrador puede consultar todas las inscripciones.
+      allow read: if esAdministrador()
+        || (
+          esEstudiante()
+          && resource.data.estudianteId == request.auth.uid
+        )
+        || (
+          esDocente()
+          && resource.data.docenteId == request.auth.uid
+        );
+
+      allow update, delete: if false;
+    }
+
+    // ==========================================
+    // SESIONES QR
+    // ==========================================
+
+    match /sesiones_qr/{sesionId} {
+
+      allow create: if esDocente()
+        && request.resource.data.keys().hasAll([
+          'token',
+          'claseId',
+          'salon',
+          'docenteId',
+          'activa',
+          'fechaCreacion',
+          'fechaExpiracion'
+        ])
+        && request.resource.data.token is string
+        && request.resource.data.claseId is string
+        && request.resource.data.salon is string
+        && request.resource.data.docenteId == request.auth.uid
+        && request.resource.data.activa == true
+        && request.resource.data.fechaCreacion is timestamp
+        && request.resource.data.fechaExpiracion is timestamp
+        && request.resource.data.fechaExpiracion
+          > request.resource.data.fechaCreacion
+        && esClasePropia(request.resource.data.claseId)
+        && get(
+          /databases/$(database)/documents/clases/$(request.resource.data.claseId)
+        ).data.activa == true
+        && (
+          get(
+            /databases/$(database)/documents/clases/$(request.resource.data.claseId)
+          ).data.salon == request.resource.data.salon
+          ||
+          request.resource.data.salon in get(
+            /databases/$(database)/documents/clases/$(request.resource.data.claseId)
+          ).data.salones
+        );
+
+      allow read: if (
+        esDocente()
+        && resource.data.docenteId == request.auth.uid
+      ) || (
+        autenticado()
+        && resource.data.activa == true
+      );
+
+      allow update: if esDocente()
+        && resource.data.docenteId == request.auth.uid
+        && resource.data.activa == true
+        && request.resource.data.diff(resource.data)
+          .affectedKeys().hasOnly(['activa'])
+        && request.resource.data.activa == false;
+
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // ASISTENCIAS
+    // ==========================================
+
+    match /asistencias/{asistenciaId} {
+
+      // El administrador puede consultar todas las asistencias
+      // para las estadísticas generales.
+      allow read: if esAdministrador()
+        || (
+          autenticado()
+          && (
+            (
+              esEstudiante()
+              && asistenciaId.matches(
+                '.*_' + request.auth.uid
+              )
+            )
+            || resource.data.estudianteId == request.auth.uid
+            || (
+              esDocente()
+              && resource.data.docenteId == request.auth.uid
+            )
+          )
+        );
+
+      allow create: if esEstudiante()
+        && request.resource.data.keys().hasAll([
+          'estudianteId',
+          'sesionId',
+          'claseId',
+          'salon',
+          'docenteId',
+          'fechaRegistro',
+          'estado'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'estudianteId',
+          'sesionId',
+          'claseId',
+          'salon',
+          'docenteId',
+          'fechaRegistro',
+          'estado'
+        ])
+        && request.resource.data.estudianteId == request.auth.uid
+        && request.resource.data.estudianteId is string
+        && request.resource.data.sesionId is string
+        && request.resource.data.claseId is string
+        && request.resource.data.salon is string
+        && request.resource.data.docenteId is string
+        && request.resource.data.fechaRegistro is timestamp
+        && request.resource.data.fechaRegistro <= request.time
+        && request.resource.data.estado == 'Presente'
+        && asistenciaId ==
+          request.resource.data.sesionId + '_' + request.auth.uid
+        && exists(
+          /databases/$(database)/documents/sesiones_qr/$(request.resource.data.sesionId)
+        )
+        && get(
+          /databases/$(database)/documents/sesiones_qr/$(request.resource.data.sesionId)
+        ).data.activa == true
+        && get(
+          /databases/$(database)/documents/sesiones_qr/$(request.resource.data.sesionId)
+        ).data.fechaExpiracion is timestamp
+        && get(
+          /databases/$(database)/documents/sesiones_qr/$(request.resource.data.sesionId)
+        ).data.fechaExpiracion > request.time
+        && get(
+          /databases/$(database)/documents/sesiones_qr/$(request.resource.data.sesionId)
+        ).data.claseId == request.resource.data.claseId
+        && get(
+          /databases/$(database)/documents/sesiones_qr/$(request.resource.data.sesionId)
+        ).data.salon == request.resource.data.salon
+        && get(
+          /databases/$(database)/documents/sesiones_qr/$(request.resource.data.sesionId)
+        ).data.docenteId == request.resource.data.docenteId
+        && exists(
+          /databases/$(database)/documents/inscripciones/$(request.resource.data.claseId + '_' + request.auth.uid)
+        )
+        && get(
+          /databases/$(database)/documents/inscripciones/$(request.resource.data.claseId + '_' + request.auth.uid)
+        ).data.estado == 'Activa'
+        && get(
+          /databases/$(database)/documents/inscripciones/$(request.resource.data.claseId + '_' + request.auth.uid)
+        ).data.estudianteId == request.auth.uid;
+
+      allow update, delete: if false;
+    }
+  }
+}

@@ -1,0 +1,362 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
+import 'package:asistencia_qr/core/theme/app_theme.dart';
+import 'package:asistencia_qr/core/widgets/fondo_vinotinto.dart';
+
+class MisClasesEstudianteScreen extends StatefulWidget {
+  const MisClasesEstudianteScreen({super.key});
+
+  @override
+  State<MisClasesEstudianteScreen> createState() =>
+      _MisClasesEstudianteScreenState();
+}
+
+class _MisClasesEstudianteScreenState extends State<MisClasesEstudianteScreen> {
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final User? _usuario = FirebaseAuth.instance.currentUser;
+
+  late final Future<DocumentSnapshot<Map<String, dynamic>>> _perfilFuture;
+
+  final Set<String> _inscribiendo = {};
+
+  @override
+  void initState() {
+    super.initState();
+
+    if (_usuario != null) {
+      _perfilFuture = _firestore.collection('usuarios').doc(_usuario.uid).get();
+    } else {
+      _perfilFuture = Future.error('No hay una sesión iniciada.');
+    }
+  }
+
+  Future<void> _inscribirse({
+    required String claseId,
+    required Map<String, dynamic> clase,
+    required String nombreEstudiante,
+  }) async {
+    final usuario = _usuario;
+
+    if (usuario == null || _inscribiendo.contains(claseId)) return;
+
+    final inscripcionId = '${claseId}_${usuario.uid}';
+
+    setState(() => _inscribiendo.add(claseId));
+
+    try {
+      final referencia = _firestore
+          .collection('inscripciones')
+          .doc(inscripcionId);
+
+      // Se crea directamente. No hacemos get() previo porque las reglas
+      // pueden impedir consultar documentos que todavía no existen.
+      await referencia.set({
+        'estudianteId': usuario.uid,
+        'estudianteNombre': nombreEstudiante,
+        'claseId': claseId,
+        'claseNombre': clase['nombre'] ?? 'Clase sin nombre',
+        'grupo': clase['grupo'] ?? '',
+        'docenteId': clase['docenteId'] ?? '',
+        'fechaInscripcion': FieldValue.serverTimestamp(),
+        'estado': 'Activa',
+      });
+
+      _mostrarMensaje('¡Te has inscrito correctamente!');
+    } on FirebaseException catch (e) {
+      debugPrint('ERROR FIREBASE AL INSCRIBIRSE: ${e.code} - ${e.message}');
+
+      if (e.code == 'permission-denied') {
+        _mostrarMensaje(
+          'Firebase rechazó la inscripción por permisos. '
+          'Código: ${e.code}',
+        );
+      } else {
+        _mostrarMensaje('Error de Firebase: ${e.code}');
+      }
+    } catch (e) {
+      debugPrint('ERROR INESPERADO AL INSCRIBIRSE: $e');
+      _mostrarMensaje('Ocurrió un error inesperado: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _inscribiendo.remove(claseId));
+      }
+    }
+  }
+
+  void _mostrarMensaje(String mensaje) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(mensaje), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_usuario == null) {
+      return const Scaffold(body: Center(child: Text('Debes iniciar sesión.')));
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: crema,
+        foregroundColor: verde,
+        title: const Text(
+          'Mis clases',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+      ),
+      body: FondoVinotinto(
+        child: SafeArea(
+          child: FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+            future: _perfilFuture,
+            builder: (context, perfilSnapshot) {
+              if (perfilSnapshot.connectionState == ConnectionState.waiting) {
+                return const Center(
+                  child: CircularProgressIndicator(color: crema),
+                );
+              }
+
+              if (perfilSnapshot.hasError) {
+                return const Center(
+                  child: Text(
+                    'No se pudo consultar tu perfil.',
+                    style: TextStyle(color: crema),
+                  ),
+                );
+              }
+
+              if (!perfilSnapshot.hasData || !perfilSnapshot.data!.exists) {
+                return const Center(
+                  child: Text(
+                    'No se encontró tu perfil de estudiante.',
+                    style: TextStyle(color: crema),
+                  ),
+                );
+              }
+
+              final perfil = perfilSnapshot.data!.data() ?? {};
+              final nombreEstudiante = (perfil['nombre'] ?? '')
+                  .toString()
+                  .trim();
+
+              if (nombreEstudiante.isEmpty) {
+                return const Center(
+                  child: Text(
+                    'Tu perfil no tiene un nombre registrado.',
+                    style: TextStyle(color: crema),
+                  ),
+                );
+              }
+
+              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _firestore
+                    .collection('inscripciones')
+                    .where('estudianteId', isEqualTo: _usuario.uid)
+                    .snapshots(),
+                builder: (context, inscripcionesSnapshot) {
+                  if (inscripcionesSnapshot.hasError) {
+                    return const Center(
+                      child: Text(
+                        'No se pudieron consultar tus inscripciones.',
+                        style: TextStyle(color: crema),
+                      ),
+                    );
+                  }
+
+                  if (!inscripcionesSnapshot.hasData) {
+                    return const Center(
+                      child: CircularProgressIndicator(color: crema),
+                    );
+                  }
+
+                  final inscritoIds = inscripcionesSnapshot.data!.docs
+                      .where((doc) => doc.data()['estado'] == 'Activa')
+                      .map((doc) => doc.data()['claseId'].toString())
+                      .toSet();
+
+                  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: _firestore
+                        .collection('clases')
+                        .where('activa', isEqualTo: true)
+                        .snapshots(),
+                    builder: (context, clasesSnapshot) {
+                      if (clasesSnapshot.hasError) {
+                        return const Center(
+                          child: Text(
+                            'No se pudieron cargar las clases.',
+                            style: TextStyle(color: crema),
+                          ),
+                        );
+                      }
+
+                      if (!clasesSnapshot.hasData) {
+                        return const Center(
+                          child: CircularProgressIndicator(color: crema),
+                        );
+                      }
+
+                      final clases = clasesSnapshot.data!.docs;
+
+                      if (clases.isEmpty) {
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text(
+                              'Actualmente no hay clases disponibles.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: crema, fontSize: 16),
+                            ),
+                          ),
+                        );
+                      }
+
+                      return ListView(
+                        padding: const EdgeInsets.all(20),
+                        children: [
+                          const Text(
+                            'Clases disponibles',
+                            style: TextStyle(
+                              color: crema,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Inscríbete en tus clases para poder registrar tu asistencia mediante el código QR.',
+                            style: TextStyle(color: crema, height: 1.5),
+                          ),
+                          const SizedBox(height: 20),
+                          ...clases.map((documento) {
+                            final clase = documento.data();
+                            final claseId = documento.id;
+                            final estaInscrito = inscritoIds.contains(claseId);
+                            final estaCargando = _inscribiendo.contains(
+                              claseId,
+                            );
+
+                            final nombre =
+                                (clase['nombre'] ?? 'Clase sin nombre')
+                                    .toString();
+                            final grupo = (clase['grupo'] ?? '').toString();
+                            final docente =
+                                (clase['docenteNombre'] ?? 'No especificado')
+                                    .toString();
+
+                            final salones = clase['salones'];
+                            final salon = salones is List && salones.isNotEmpty
+                                ? salones.join(', ')
+                                : (clase['salon'] ?? 'No especificado')
+                                      .toString();
+
+                            return Card(
+                              color: crema,
+                              elevation: 3,
+                              margin: const EdgeInsets.only(bottom: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(17),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.menu_book_rounded,
+                                          color: verde,
+                                          size: 30,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            nombre,
+                                            style: const TextStyle(
+                                              color: verde,
+                                              fontSize: 17,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      'Grupo: ${grupo.isEmpty ? 'No especificado' : grupo}',
+                                      style: const TextStyle(
+                                        color: vinotintoMedio,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 5),
+                                    Text(
+                                      'Docente: $docente',
+                                      style: const TextStyle(
+                                        color: vinotintoMedio,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 5),
+                                    Text(
+                                      'Salón: $salon',
+                                      style: const TextStyle(
+                                        color: vinotintoMedio,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 15),
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: ElevatedButton.icon(
+                                        onPressed: estaInscrito || estaCargando
+                                            ? null
+                                            : () => _inscribirse(
+                                                claseId: claseId,
+                                                clase: clase,
+                                                nombreEstudiante:
+                                                    nombreEstudiante,
+                                              ),
+                                        icon: Icon(
+                                          estaInscrito
+                                              ? Icons.check_circle_rounded
+                                              : Icons.add_circle_outline,
+                                        ),
+                                        label: Text(
+                                          estaInscrito
+                                              ? 'Ya estás inscrito'
+                                              : estaCargando
+                                              ? 'Inscribiendo...'
+                                              : 'Inscribirme',
+                                        ),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: verde,
+                                          foregroundColor: crema,
+                                          disabledBackgroundColor: estaInscrito
+                                              ? verde.withValues(alpha: 0.7)
+                                              : Colors.grey,
+                                          disabledForegroundColor: crema,
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 13,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }),
+                        ],
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}

@@ -1,0 +1,74 @@
+import 'package:flutter/material.dart';
+
+import 'app_theme.dart';
+
+/// Estilos y medidas reutilizables de Asistencia Virtual.
+class AppStyles {
+  AppStyles._();
+
+  // Bordes
+  static const double radioPequeno = 10;
+  static const double radioMediano = 13;
+  static const double radioGrande = 16;
+  static const double radioTarjeta = 18;
+
+  // Espaciados
+  static const EdgeInsets paddingPequeno = EdgeInsets.all(8);
+  static const EdgeInsets paddingMediano = EdgeInsets.all(12);
+  static const EdgeInsets paddingGrande = EdgeInsets.all(16);
+  static const EdgeInsets paddingTarjeta = EdgeInsets.all(20);
+
+  // Textos
+  static const TextStyle titulo = TextStyle(
+    color: verde,
+    fontSize: 20,
+    fontWeight: FontWeight.bold,
+  );
+
+  static const TextStyle subtitulo = TextStyle(
+    color: vinotintoMedio,
+    fontSize: 14,
+    fontWeight: FontWeight.w600,
+  );
+
+  static const TextStyle textoSecundario = TextStyle(
+    color: vinotintoMedio,
+    fontSize: 12,
+  );
+
+  static const TextStyle etiqueta = TextStyle(
+    color: vinotintoMedio,
+    fontSize: 11,
+  );
+
+  static const TextStyle tituloTarjeta = TextStyle(
+    color: verde,
+    fontWeight: FontWeight.bold,
+    fontSize: 16,
+  );
+
+  static const TextStyle descripcionTarjeta = TextStyle(
+    color: vinotintoMedio,
+    fontSize: 12,
+  );
+
+  static const EdgeInsets paddingTarjetaAdmin = EdgeInsets.all(18);
+  // Decoraciones
+  static BoxDecoration tarjeta({
+    Color color = cremaClaro,
+    double radio = radioGrande,
+  }) {
+    return BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(radio),
+      border: Border.all(color: bordeCrema),
+    );
+  }
+
+  static BoxDecoration tarjetaVerde({double radio = radioGrande}) {
+    return BoxDecoration(
+      color: verde,
+      borderRadius: BorderRadius.circular(radio),
+    );
+  }
+}

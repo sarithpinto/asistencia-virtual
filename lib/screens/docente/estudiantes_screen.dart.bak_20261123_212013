@@ -1,0 +1,761 @@
+import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+import 'package:asistencia_qr/core/theme/app_theme.dart';
+import 'package:asistencia_qr/core/widgets/fondo_vinotinto.dart';
+
+class EstudiantesScreen extends StatefulWidget {
+  const EstudiantesScreen({super.key});
+
+  @override
+  State<EstudiantesScreen> createState() => _EstudiantesScreenState();
+}
+
+class _EstudiantesScreenState extends State<EstudiantesScreen> {
+  String? _claseSeleccionada;
+
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _clasesStream;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _inscripcionesStream;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _sesionesStream;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _asistenciasStream;
+
+  @override
+  void initState() {
+    super.initState();
+
+    final usuario = FirebaseAuth.instance.currentUser;
+
+    if (usuario != null) {
+      final baseDatos = FirebaseFirestore.instance;
+
+      _clasesStream = baseDatos
+          .collection('clases')
+          .where('docenteId', isEqualTo: usuario.uid)
+          .snapshots();
+
+      _inscripcionesStream = baseDatos
+          .collection('inscripciones')
+          .where('docenteId', isEqualTo: usuario.uid)
+          .snapshots();
+
+      _sesionesStream = baseDatos
+          .collection('sesiones_qr')
+          .where('docenteId', isEqualTo: usuario.uid)
+          .snapshots();
+
+      _asistenciasStream = baseDatos
+          .collection('asistencias')
+          .where('docenteId', isEqualTo: usuario.uid)
+          .snapshots();
+    } else {
+      _clasesStream = const Stream.empty();
+      _inscripcionesStream = const Stream.empty();
+      _sesionesStream = const Stream.empty();
+      _asistenciasStream = const Stream.empty();
+    }
+  }
+
+  String _fecha(dynamic valor) {
+    if (valor is Timestamp) {
+      final fecha = valor.toDate();
+
+      final dia = fecha.day.toString().padLeft(2, '0');
+      final mes = fecha.month.toString().padLeft(2, '0');
+      final anio = fecha.year.toString();
+
+      final hora = fecha.hour.toString().padLeft(2, '0');
+      final minuto = fecha.minute.toString().padLeft(2, '0');
+
+      return '$dia/$mes/$anio · $hora:$minuto';
+    }
+
+    return 'Fecha no disponible';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final usuario = FirebaseAuth.instance.currentUser;
+
+    if (usuario == null) {
+      return const Scaffold(body: Center(child: Text('Debes iniciar sesión.')));
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Estudiantes',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        backgroundColor: crema,
+        foregroundColor: verde,
+      ),
+      body: FondoVinotinto(
+        child: SafeArea(
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _clasesStream,
+            builder: (context, clasesSnapshot) {
+              if (clasesSnapshot.hasError) {
+                return _mensajeCentral(
+                  'No se pudieron cargar tus clases. '
+                  'Revisa los permisos de Firebase.',
+                );
+              }
+
+              if (clasesSnapshot.connectionState == ConnectionState.waiting) {
+                return const Center(
+                  child: CircularProgressIndicator(color: crema),
+                );
+              }
+
+              final clases = clasesSnapshot.data?.docs ?? [];
+
+              if (clases.isEmpty) {
+                return _mensajeCentral('Todavía no tienes clases creadas.');
+              }
+
+              final clasesOrdenadas = [...clases];
+
+              clasesOrdenadas.sort((a, b) {
+                final nombreA = a.data()['nombre']?.toString() ?? '';
+                final nombreB = b.data()['nombre']?.toString() ?? '';
+
+                return nombreA.compareTo(nombreB);
+              });
+
+              final seleccionValida = clasesOrdenadas.any(
+                (clase) => clase.id == _claseSeleccionada,
+              );
+
+              final claseId = seleccionValida
+                  ? _claseSeleccionada!
+                  : clasesOrdenadas.first.id;
+
+              if (_claseSeleccionada != claseId) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted && _claseSeleccionada != claseId) {
+                    setState(() {
+                      _claseSeleccionada = claseId;
+                    });
+                  }
+                });
+              }
+
+              final claseActual = clasesOrdenadas.firstWhere(
+                (clase) => clase.id == claseId,
+              );
+
+              final datosClase = claseActual.data();
+
+              return ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  const Text(
+                    'CONTROL DE ESTUDIANTES',
+                    style: TextStyle(
+                      color: crema,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.4,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Consulta los estudiantes inscritos y revisa '
+                    'su asistencia en cada sesión.',
+                    style: TextStyle(color: crema, fontSize: 14, height: 1.5),
+                  ),
+                  const SizedBox(height: 22),
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: crema,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Selecciona una clase',
+                          style: TextStyle(
+                            color: verde,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        DropdownButtonFormField<String>(
+                          initialValue: claseId,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: cremaClaro,
+                            prefixIcon: const Icon(
+                              Icons.menu_book_rounded,
+                              color: verde,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          items: clasesOrdenadas.map((clase) {
+                            final datos = clase.data();
+                            final nombre =
+                                datos['nombre']?.toString() ?? 'Sin nombre';
+                            final grupo = datos['grupo']?.toString() ?? '';
+
+                            return DropdownMenuItem<String>(
+                              value: clase.id,
+                              child: Text(
+                                grupo.isEmpty ? nombre : '$nombre · $grupo',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: (valor) {
+                            if (valor == null) return;
+
+                            setState(() {
+                              _claseSeleccionada = valor;
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 14),
+                        Text(
+                          'Grupo: ${datosClase['grupo'] ?? 'No definido'}',
+                          style: const TextStyle(color: vinotintoMedio),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Salón: ${_obtenerSalones(datosClase)}',
+                          style: const TextStyle(color: vinotintoMedio),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: _inscripcionesStream,
+                    builder: (context, inscripcionesSnapshot) {
+                      if (inscripcionesSnapshot.hasError) {
+                        return _tarjetaMensaje(
+                          'No se pudieron consultar las inscripciones.',
+                        );
+                      }
+
+                      if (inscripcionesSnapshot.connectionState ==
+                          ConnectionState.waiting) {
+                        return const Center(
+                          child: CircularProgressIndicator(color: crema),
+                        );
+                      }
+
+                      final inscripciones =
+                          (inscripcionesSnapshot.data?.docs ?? []).where((
+                            documento,
+                          ) {
+                            final datos = documento.data();
+
+                            return datos['claseId'] == claseId &&
+                                datos['estado'] == 'Activa';
+                          }).toList();
+
+                      inscripciones.sort((a, b) {
+                        final nombreA =
+                            a
+                                .data()['estudianteNombre']
+                                ?.toString()
+                                .toLowerCase() ??
+                            '';
+                        final nombreB =
+                            b
+                                .data()['estudianteNombre']
+                                ?.toString()
+                                .toLowerCase() ??
+                            '';
+
+                        return nombreA.compareTo(nombreB);
+                      });
+
+                      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                        stream: _sesionesStream,
+                        builder: (context, sesionesSnapshot) {
+                          if (sesionesSnapshot.hasError) {
+                            return _tarjetaMensaje(
+                              'No se pudieron consultar las sesiones QR.',
+                            );
+                          }
+
+                          if (sesionesSnapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            return const Center(
+                              child: CircularProgressIndicator(color: crema),
+                            );
+                          }
+
+                          final sesiones = (sesionesSnapshot.data?.docs ?? [])
+                              .where(
+                                (documento) =>
+                                    documento.data()['claseId'] == claseId,
+                              )
+                              .toList();
+
+                          sesiones.sort((a, b) {
+                            final fechaA =
+                                a.data()['fechaCreacion'] as Timestamp?;
+                            final fechaB =
+                                b.data()['fechaCreacion'] as Timestamp?;
+
+                            return (fechaB?.millisecondsSinceEpoch ?? 0)
+                                .compareTo(fechaA?.millisecondsSinceEpoch ?? 0);
+                          });
+
+                          return StreamBuilder<
+                            QuerySnapshot<Map<String, dynamic>>
+                          >(
+                            stream: _asistenciasStream,
+                            builder: (context, asistenciasSnapshot) {
+                              if (asistenciasSnapshot.hasError) {
+                                return _tarjetaMensaje(
+                                  'No se pudieron consultar las asistencias.',
+                                );
+                              }
+
+                              if (asistenciasSnapshot.connectionState ==
+                                  ConnectionState.waiting) {
+                                return const Center(
+                                  child: CircularProgressIndicator(
+                                    color: crema,
+                                  ),
+                                );
+                              }
+
+                              final asistencias =
+                                  asistenciasSnapshot.data?.docs ?? [];
+
+                              final asistenciasClase = asistencias
+                                  .where(
+                                    (documento) =>
+                                        documento.data()['claseId'] == claseId,
+                                  )
+                                  .toList();
+
+                              final totalEstudiantes = inscripciones.length;
+
+                              final totalSesiones = sesiones.length;
+
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: _indicador(
+                                          Icons.people_alt_rounded,
+                                          '$totalEstudiantes',
+                                          'Inscritos',
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: _indicador(
+                                          Icons.qr_code_rounded,
+                                          '$totalSesiones',
+                                          'Sesiones',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 24),
+                                  const Text(
+                                    'ESTUDIANTES INSCRITOS',
+                                    style: TextStyle(
+                                      color: crema,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 1.2,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  if (inscripciones.isEmpty)
+                                    _tarjetaMensaje(
+                                      'Todavía no hay estudiantes inscritos '
+                                      'en esta clase.',
+                                    )
+                                  else
+                                    ...inscripciones.map((inscripcion) {
+                                      final datos = inscripcion.data();
+
+                                      final nombre =
+                                          datos['estudianteNombre']
+                                              ?.toString() ??
+                                          'Estudiante';
+
+                                      return Card(
+                                        color: crema,
+                                        margin: const EdgeInsets.only(
+                                          bottom: 9,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            14,
+                                          ),
+                                        ),
+                                        child: ListTile(
+                                          leading: CircleAvatar(
+                                            backgroundColor: verde.withValues(
+                                              alpha: 0.10,
+                                            ),
+                                            child: const Icon(
+                                              Icons.person_rounded,
+                                              color: verde,
+                                            ),
+                                          ),
+                                          title: Text(
+                                            nombre,
+                                            style: const TextStyle(
+                                              color: verde,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                          subtitle: Text(
+                                            'Inscripción activa',
+                                            style: TextStyle(
+                                              color: verde.withValues(
+                                                alpha: 0.75,
+                                              ),
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                          trailing: const Icon(
+                                            Icons.verified_rounded,
+                                            color: verde,
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                  const SizedBox(height: 22),
+                                  const Text(
+                                    'ASISTENCIA POR SESIÓN',
+                                    style: TextStyle(
+                                      color: crema,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 1.2,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  if (sesiones.isEmpty)
+                                    _tarjetaMensaje(
+                                      'Todavía no se han generado sesiones '
+                                      'QR para esta clase.',
+                                    )
+                                  else
+                                    ...sesiones.map((sesion) {
+                                      final datosSesion = sesion.data();
+
+                                      final fechaCreacion =
+                                          datosSesion['fechaCreacion'];
+
+                                      final fechaExpiracion =
+                                          datosSesion['fechaExpiracion'];
+
+                                      final vencimiento =
+                                          fechaExpiracion is Timestamp
+                                          ? fechaExpiracion.toDate()
+                                          : null;
+
+                                      final sigueActiva =
+                                          datosSesion['activa'] == true &&
+                                          vencimiento != null &&
+                                          vencimiento.isAfter(DateTime.now());
+
+                                      final asistenciasSesion = asistenciasClase
+                                          .where((doc) {
+                                            final datos = doc.data();
+
+                                            return datos['sesionId'] ==
+                                                    sesion.id &&
+                                                datos['estado'] == 'Presente';
+                                          })
+                                          .toList();
+
+                                      final estudiantesPresentes =
+                                          asistenciasSesion
+                                              .map(
+                                                (doc) =>
+                                                    doc.data()['estudianteId'],
+                                              )
+                                              .whereType<String>()
+                                              .toSet();
+
+                                      final totalPresentes =
+                                          estudiantesPresentes.length;
+
+                                      final totalAusentes =
+                                          totalEstudiantes - totalPresentes;
+
+                                      return Card(
+                                        color: crema,
+                                        margin: const EdgeInsets.only(
+                                          bottom: 14,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            17,
+                                          ),
+                                        ),
+                                        child: ExpansionTile(
+                                          iconColor: verde,
+                                          collapsedIconColor: verde,
+                                          leading: Icon(
+                                            sigueActiva
+                                                ? Icons.timer_rounded
+                                                : Icons.history_rounded,
+                                            color: sigueActiva
+                                                ? Colors.orange.shade800
+                                                : verde,
+                                          ),
+                                          title: Text(
+                                            'Sesión · ${datosSesion['salon'] ?? 'Sin salón'}',
+                                            style: const TextStyle(
+                                              color: verde,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                          subtitle: Padding(
+                                            padding: const EdgeInsets.only(
+                                              top: 5,
+                                            ),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  _fecha(fechaCreacion),
+                                                  style: const TextStyle(
+                                                    color: vinotintoMedio,
+                                                    fontSize: 12,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 5),
+                                                Text(
+                                                  sigueActiva
+                                                      ? 'Sesión en curso · $totalPresentes presentes'
+                                                      : '$totalPresentes presentes · $totalAusentes ausentes',
+                                                  style: TextStyle(
+                                                    color: sigueActiva
+                                                        ? Colors.orange.shade800
+                                                        : verde,
+                                                    fontWeight: FontWeight.w600,
+                                                    fontSize: 12,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          children: [
+                                            const Divider(
+                                              color: bordeCrema,
+                                              height: 1,
+                                            ),
+                                            if (inscripciones.isEmpty)
+                                              const Padding(
+                                                padding: EdgeInsets.all(16),
+                                                child: Text(
+                                                  'No hay estudiantes inscritos.',
+                                                  style: TextStyle(
+                                                    color: vinotintoMedio,
+                                                  ),
+                                                ),
+                                              )
+                                            else
+                                              ...inscripciones.map((
+                                                inscripcion,
+                                              ) {
+                                                final datos = inscripcion
+                                                    .data();
+
+                                                final estudianteId =
+                                                    datos['estudianteId']
+                                                        ?.toString();
+
+                                                final nombre =
+                                                    datos['estudianteNombre']
+                                                        ?.toString() ??
+                                                    'Estudiante';
+
+                                                final asistio =
+                                                    estudianteId != null &&
+                                                    estudiantesPresentes
+                                                        .contains(estudianteId);
+
+                                                final estado = asistio
+                                                    ? 'Presente'
+                                                    : sigueActiva
+                                                    ? 'Pendiente'
+                                                    : 'Ausente';
+
+                                                final colorEstado = asistio
+                                                    ? verde
+                                                    : sigueActiva
+                                                    ? Colors.orange
+                                                    : vinotintoMedio;
+
+                                                return ListTile(
+                                                  dense: true,
+                                                  leading: Icon(
+                                                    asistio
+                                                        ? Icons
+                                                              .check_circle_rounded
+                                                        : sigueActiva
+                                                        ? Icons
+                                                              .hourglass_empty_rounded
+                                                        : Icons.cancel_rounded,
+                                                    color: colorEstado,
+                                                  ),
+                                                  title: Text(
+                                                    nombre,
+                                                    style: const TextStyle(
+                                                      color: verde,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      fontSize: 14,
+                                                    ),
+                                                  ),
+                                                  trailing: Text(
+                                                    estado,
+                                                    style: TextStyle(
+                                                      color: colorEstado,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                );
+                                              }),
+                                            if (sigueActiva)
+                                              const Padding(
+                                                padding: EdgeInsets.fromLTRB(
+                                                  16,
+                                                  4,
+                                                  16,
+                                                  14,
+                                                ),
+                                                child: Text(
+                                                  'La sesión todavía está activa. '
+                                                  'Los estudiantes pendientes '
+                                                  'no se consideran ausentes.',
+                                                  style: TextStyle(
+                                                    color: vinotintoMedio,
+                                                    fontSize: 12,
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      );
+                                    }),
+                                  const SizedBox(height: 20),
+                                ],
+                              );
+                            },
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _obtenerSalones(Map<String, dynamic> datos) {
+    final salones = datos['salones'];
+
+    if (salones is List) {
+      final lista = salones
+          .whereType<String>()
+          .map((salon) => salon.trim())
+          .where((salon) => salon.isNotEmpty)
+          .toList();
+
+      if (lista.isNotEmpty) return lista.join(', ');
+    }
+
+    final salonAnterior = datos['salon'];
+
+    if (salonAnterior is String && salonAnterior.trim().isNotEmpty) {
+      return salonAnterior;
+    }
+
+    return 'No definidos';
+  }
+
+  Widget _mensajeCentral(String mensaje) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.groups_rounded, color: crema, size: 64),
+            const SizedBox(height: 16),
+            Text(
+              mensaje,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: crema, fontSize: 15, height: 1.5),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tarjetaMensaje(String mensaje) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: crema,
+        borderRadius: BorderRadius.circular(15),
+      ),
+      child: Text(
+        mensaje,
+        textAlign: TextAlign.center,
+        style: const TextStyle(color: vinotintoMedio, height: 1.5),
+      ),
+    );
+  }
+
+  Widget _indicador(IconData icono, String cantidad, String titulo) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 17, horizontal: 10),
+      decoration: BoxDecoration(
+        color: crema,
+        borderRadius: BorderRadius.circular(15),
+      ),
+      child: Column(
+        children: [
+          Icon(icono, color: verde, size: 27),
+          const SizedBox(height: 7),
+          Text(
+            cantidad,
+            style: const TextStyle(
+              color: verde,
+              fontSize: 23,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          Text(
+            titulo,
+            style: const TextStyle(color: vinotintoMedio, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
